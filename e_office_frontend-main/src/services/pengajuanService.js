@@ -1,0 +1,1 @@
+export { pengajuanService } from './index';
