@@ -4,6 +4,7 @@ import { MainLayout } from "../layouts";
 import { Card, Table, Button } from "../components";
 import { pengajuanService, dosenService, userService } from "../services";
 import { formatDate } from "../utils";
+import apiClient from '../services/api';
 import {
   Mail,
   Send,
@@ -20,14 +21,12 @@ import { motion } from "framer-motion";
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  // 1. AMBIL DATA USER YANG SEDANG LOGIN
   const userString = localStorage.getItem("user");
   const user = userString
     ? JSON.parse(userString)
     : { nama: "Pengguna", role: "mahasiswa" };
   const userRole = user.role?.toLowerCase() || "mahasiswa";
 
-  // 2. STATE UNTUK MENAMPUNG DATA API
   const [stats, setStats] = useState({
     suratMasuk: 0,
     tugasAkhir: 0,
@@ -42,7 +41,6 @@ export default function Dashboard() {
     { id: 2, text: "Sinkronisasi data dengan server", time: "1 menit lalu", icon: "🔄" },
   ]);
 
-  // 3. TARIK DATA DARI BACKEND BERDASARKAN ROLE
   useEffect(() => {
     const loadDashboardData = async () => {
       setLoading(true);
@@ -57,28 +55,33 @@ export default function Dashboard() {
           const res = await pengajuanService.getRiwayat();
           const data = res.data || [];
           recentData = data;
-          
           totalSurat = data.filter(item => item.jenis_pengajuan === 'Surat').length;
           totalTA = data.filter(item => item.jenis_pengajuan === 'Tugas Akhir').length;
-          pending = data.filter(item => item.status === 'Pending').length;
+          pending = data.filter(item => item.status === 'pending').length;
 
         } else if (userRole === "dosen") {
           const res = await dosenService.getPengajuanMasuk();
           const data = res.data || [];
           recentData = data;
-
           totalSurat = data.filter(item => item.jenis_pengajuan === 'Surat').length;
           totalTA = data.filter(item => item.jenis_pengajuan === 'Tugas Akhir').length;
-          pending = data.filter(item => item.status === 'Pending').length;
+          pending = data.filter(item => item.status === 'pending').length;
 
         } else if (userRole === "admin") {
-          const res = await userService.getUsers();
-          const data = res.data || [];
-          totalUsr = data.length;
-          
-          // Fallback dummy untuk surat jika di admin (karena admin belum ada API getAllSurat)
-          totalSurat = 120; 
-          totalTA = 30;
+          // ✅ FIX: Ambil data dari endpoint admin/dashboard
+          const [usersRes, dashRes] = await Promise.all([
+            userService.getUsers(),
+            apiClient.get("/admin/dashboard")
+          ]);
+
+          const usersData = usersRes.data || [];
+          const dashData = dashRes.data || {};
+
+          totalUsr = usersData.length;
+          totalSurat = dashData.total_pengajuan_selesai || 0;
+          totalTA = dashData.total_pengajuan_pending || 0;
+          pending = dashData.total_pengajuan_pending || 0;
+          recentData = usersData;
         }
 
         setStats({
@@ -87,12 +90,11 @@ export default function Dashboard() {
           persetujuanPending: pending,
           totalUser: totalUsr
         });
-        
+
         setRecentLetters(recentData.slice(0, 3));
 
       } catch (error) {
-        console.warn("Menggunakan mock data (Backend belum siap/offline)");
-        // Mock Data Fallback
+        console.warn("Menggunakan mock data (Backend belum siap/offline)", error);
         setStats({ suratMasuk: 8, tugasAkhir: 3, persetujuanPending: 2, totalUser: 45 });
       } finally {
         setLoading(false);
@@ -102,7 +104,6 @@ export default function Dashboard() {
     loadDashboardData();
   }, [userRole]);
 
-  // 4. KONFIGURASI TAMPILAN BERDASARKAN ROLE (Menyambungkan State Stats)
   let statCards = [];
   let quickActions = [];
   let tableColumns = [];
@@ -126,8 +127,8 @@ export default function Dashboard() {
   } else if (userRole === "admin") {
     statCards = [
       { icon: <Users size={24} />, title: "Total User", value: stats.totalUser, color: "green", trend: "Mahasiswa & Dosen" },
-      { icon: <Mail size={24} />, title: "Total Pengajuan", value: stats.suratMasuk, color: "blue", trend: "Surat & TA" },
-      { icon: <BookOpen size={24} />, title: "Judul TA", value: stats.tugasAkhir, color: "purple", trend: "Didaftarkan" },
+      { icon: <Mail size={24} />, title: "Pengajuan Selesai", value: stats.suratMasuk, color: "blue", trend: "Disetujui & Ditolak" },
+      { icon: <AlertCircle size={24} />, title: "Pending", value: stats.tugasAkhir, color: "yellow", trend: "Menunggu Review" },
     ];
     quickActions = [
       { icon: <Users size={20} />, label: "Manajemen User", color: "bg-green-50 hover:bg-green-100 text-green-600 border border-green-200", action: () => navigate("/users") },
@@ -139,7 +140,6 @@ export default function Dashboard() {
       { key: "role", label: "Role" },
     ];
   } else {
-    // MAHASISWA (Default)
     statCards = [
       { icon: <Mail size={24} />, title: "Pengajuan Surat", value: stats.suratMasuk, color: "blue", trend: "Total Pengajuan" },
       { icon: <BookOpen size={24} />, title: "Judul TA", value: stats.tugasAkhir, color: "purple", trend: "Judul Diajukan" },
@@ -158,7 +158,6 @@ export default function Dashboard() {
     ];
   }
 
-  // 5. ANIMASI FRAMER MOTION
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.1 } },
@@ -172,7 +171,6 @@ export default function Dashboard() {
   return (
     <MainLayout>
       <motion.div className="space-y-6" variants={containerVariants} initial="hidden" animate="visible">
-        {/* Welcome Header */}
         <motion.div variants={itemVariants} className="bg-gradient-to-r from-blue-700 via-blue-800 to-blue-900 text-white rounded-2xl p-6 md:p-8 shadow-lg relative overflow-hidden">
           <div className="absolute right-0 top-0 w-64 h-64 bg-blue-600 rounded-full mix-blend-screen opacity-10 translate-x-20 -translate-y-20"></div>
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
@@ -190,14 +188,12 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        {/* Stats Cards Grid */}
         <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {statCards.map((stat, idx) => (
             <Card key={idx} icon={stat.icon} title={stat.title} value={loading ? "..." : stat.value} color={stat.color} trend={stat.trend} />
           ))}
         </motion.div>
 
-        {/* Quick Actions */}
         <motion.div variants={itemVariants} className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
           <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><span>⚡</span> Navigasi Cepat</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -213,9 +209,7 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        {/* Two Column Layout (Table & Activity) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Table Data */}
           <motion.div variants={itemVariants} className="lg:col-span-2 bg-white rounded-xl shadow-md overflow-hidden border border-gray-100">
             <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-transparent flex justify-between items-center">
               <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Mail size={22} className="text-blue-600" /> Data Terbaru</h2>
@@ -233,7 +227,6 @@ export default function Dashboard() {
             </div>
           </motion.div>
 
-          {/* Activity Feed */}
           <motion.div variants={itemVariants} className="bg-white rounded-xl shadow-md p-6 border border-gray-100 flex flex-col justify-between">
             <div>
               <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">📊 Aktivitas Sistem</h2>
@@ -253,9 +246,7 @@ export default function Dashboard() {
             </div>
           </motion.div>
         </div>
-
       </motion.div>
     </MainLayout>
   );
 }
-
